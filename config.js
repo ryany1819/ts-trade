@@ -6,7 +6,7 @@ module.exports = {
             'User-Agent': 'request',
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': '63fc1b5e33daf6eb41b1b784e4b97727e8fa359a'          
+            'Authorization': ''          
         },
         apis: {
             instruments: {

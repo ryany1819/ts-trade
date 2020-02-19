@@ -3,21 +3,79 @@ const common = require('./common.js');
 const { tsapi } = require('./config.js');
 const io = require('socket.io-client');
 const querystring = require('querystring');
-const axios = require('axios');
 
 if (process.env['TS_ACCESS_TOKEN']) {
     tsapi.access_token = process.env['TS_ACCESS_TOKEN']
 }
 common.log(tsapi.host, tsapi.access_token);
+
+const fxcmObj = {
+    instruments: null,
+    active_symbols: null,
+    market_prices: {}
+}
+
+const fxcmApi = require('./fxcm-api.js');
+console.log(tsapi.host, tsapi.access_token)
 const socket = io(tsapi.host, {
     query: querystring.stringify({ access_token: tsapi.access_token })
 });
-socket.on('connect', () => {
+// socket.on('connect', () => {
+//     tsapi.headers['Authorization'] = `Bearer ${socket.id}${tsapi.access_token}`;
+//     common.log('socket.io connected. bearer = ', tsapi.headers['Authorization']);
+//     fxcmApi.getInstruments(tsapi, (instruments) => {
+//         fxcmApi.instruments = instruments;
+//         fxcmObj.active_symbols = [];
+//         // collect active pairs
+//         for (let inst of instruments) {
+//             if (inst.visible) {
+//                 fxcmObj.active_symbols.push(inst.symbol);
+//             }
+//         }
+//         if (fxcmObj.active_symbols.length > 0) {
+//             // do subscription for each active pair
+//             fxcmApi.subscribe(tsapi, fxcmObj.active_symbols, (pairs) => {
+//                 for (let pair of pairs) {
+//                     socket.on(pair.Symbol, (data) => {
+//                         console.log('update')
+//                         fxcmObj.market_prices[data.Symbol] = {
+//                             time: data.Updated,
+//                             rates: data.Rates
+//                         }
+//                     });
+//                 }
+//             });
+//         }
+//     })
+// });
+socket.on('connect', async () => {
     tsapi.headers['Authorization'] = `Bearer ${socket.id}${tsapi.access_token}`;
     common.log('socket.io connected. bearer = ', tsapi.headers['Authorization']);
+    fxcmApi.instruments = await fxcmApi.getInstrumentsA(tsapi);
+    fxcmObj.active_symbols = [];
+    // collect active pairs
+    for (let inst of fxcmApi.instruments) {
+        if (inst.visible) {
+            fxcmObj.active_symbols.push(inst.symbol);
+        }
+    }
+    if (fxcmObj.active_symbols.length > 0) {
+        // do subscription for each active pair
+        const pairs = await fxcmApi.subscribe(tsapi, fxcmObj.active_symbols);
+        for (let pair of pairs) {
+            socket.on(pair.Symbol, (data) => {
+                console.log('update')
+                fxcmObj.market_prices[data.Symbol] = {
+                    time: data.Updated,
+                    rates: data.Rates
+                }
+            });
+        }
+    }
 });
 socket.on('connect_error', (err) => {
     common.log('socket.io connection err: ', err);
+    tsapi.headers['Authorization'] = '';
 });
 socket.on('error', (err) => {
     common.log('socket.io generic error: ', err);
@@ -25,6 +83,7 @@ socket.on('error', (err) => {
 });
 socket.on('disconnect', () => {
     common.log('socket.io disconnected.');
+    tsapi.headers['Authorization'] = '';
 });
 
 // launch express erver
@@ -39,57 +98,58 @@ app.get('/', (req, res) => {
     console.log('hello world');
     res.status(200).send('hello world');
 })
-app.get('/instruments', (req, res) => {
-    axios({
-        headers: tsapi.headers,
-        baseURL: tsapi.host,
-        url: tsapi.apis.instruments.uri,
-        method: tsapi.apis.instruments.method
-    }).then(data => {
-        common.log('response=', data.data);
-        res.status(200).send(JSON.stringify(data.data));
-    });
-    // axios.get(common.getUrl(tsapi.host, tsapi.endpoints.instruments.uri), { headers: headers }).then(data => {
-    //     console.log(tsapi_request_header);
-    //     console.log('data=',data.data);
-    //     res.status(200).send(JSON.stringify(data.data));
-    // });
-    // http.request({
-    //     host: config.tsapi_host,
-    //     path: '/trading/get_instruments',
-    //     method: 'GET',
-    //     headers: tsapi_request_header
-    // }
-    // , (res) => {
-    //     var data;
-    //     res.on('data', (chunk) => data += chunk);
-    //     res.on('end', () => {}); 
-    // });
+app.get('/instruments', async (req, res) => {
+    try {
+        const instruments = await fxcmApi.getInstrumentsA(tsapi);
+        res.status(200).send(instruments);
+    }
+    catch (err) {
+        res.status(400).send(err);
+    }
 });
 
-app.get('/subscribe', (req, res) => {
-    axios({
-        headers: tsapi.headers,
-        baseURL: tsapi.host,
-        url: tsapi.apis.subscribe.uri,
-        method: tsapi.apis.subscribe.method,
-        data: querystring.stringify({ "pairs": ["EUR/USD", "USD/JPY"] })
-    }).then(data => {
-        if (data.data.response.executed) {
-            common.log('subscription success', data, data.data);
-            for (let pair of data.data.pairs) {
-                common.log('setting up socket for', pair.Symbol);
-                socket.on(pair.Symbol, (data) => common.log("PriceUpdate", JSON.parse(data)));
-            }
-            res.status(200).send();
-        } else {
-            common.log(data);
-            res.status(400).send();
+app.post('/subscribe', async (req, res) => {
+    try {
+        const symbols = req.body.pairs;
+        let i = 0;
+        while (i < symbols.length) {
+            if (fxcmObj.active_symbols[symbols[i]]) symbols.splice(i, 1);
         }
-    }).catch(err => {
-        common.log(err);
-        res.status(500).send();
-    });
+        const pairs = await fxcmApi.subscribe(tsapi, symbols);
+        for (let pair of pairs) {
+            fxcmObj.active_symbols.push(pair.Symbol);
+            socket.on(pair.Symbol, (data) => {
+                fxcmObj.market_prices[data.Symbol] = {
+                    time: data.Updated,
+                    rates: data.Rates
+                }
+            })
+        }
+    }
+    catch (err) {
+        res.status(400).send(err);
+    }
+    // axios({
+    //     headers: tsapi.headers,
+    //     baseURL: tsapi.host,
+    //     url: tsapi.apis.subscribe.uri,
+    //     method: tsapi.apis.subscribe.method,
+    //     data: querystring.stringify({ "pairs": ["EUR/USD", "USD/JPY"] })
+    // }).then(data => {
+    //     if (data.data.response.executed) {
+    //         common.log('subscription success', data, data.data);
+    //         for (let pair of data.data.pairs) {
+    //             common.log('setting up socket for', pair.Symbol);
+    //             socket.on(pair.Symbol, (data) => common.log("PriceUpdate", JSON.parse(data)));
+    //         }
+    //         res.status(200).send();
+    //     } else {
+    //         res.status(400).send('wasn\'t subscribed.');
+    //     }
+    // }).catch(err => {
+    //     common.log('error in subscription', err);
+    //     res.status(500).send();
+    // });
 });
 app.post('/notify', (req, res) => {
     console.log('request coming');
