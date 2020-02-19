@@ -8,23 +8,23 @@ const axios = require('axios');
 if (process.env['TS_ACCESS_TOKEN']) {
     tsapi.access_token = process.env['TS_ACCESS_TOKEN']
 }
-console.log(tsapi.host, tsapi.access_token);
+common.log(tsapi.host, tsapi.access_token);
 const socket = io(tsapi.host, {
     query: querystring.stringify({ access_token: tsapi.access_token })
 });
 socket.on('connect', () => {
     tsapi.headers['Authorization'] = `Bearer ${socket.id}${tsapi.access_token}`;
-    console.log(common.getTimeStamp(), 'socket.io connected. bearer = ', tsapi.headers['Authorization']);
+    common.log('socket.io connected. bearer = ', tsapi.headers['Authorization']);
 });
 socket.on('connect_error', (err) => {
-    console.log(common.getTimeStamp(), 'socket.io connection err: ', err);
+    common.log('socket.io connection err: ', err);
 });
 socket.on('error', (err) => {
-    console.log(common.getTimeStamp(), 'socket.io generic error: ', err);
+    common.log('socket.io generic error: ', err);
     tsapi.headers['Authorization'] = '';
 });
 socket.on('disconnect', () => {
-    console.log(common.getTimeStamp(), 'socket.io disconnected.');
+    common.log('socket.io disconnected.');
 });
 
 // launch express erver
@@ -40,14 +40,13 @@ app.get('/', (req, res) => {
     res.status(200).send('hello world');
 })
 app.get('/instruments', (req, res) => {
-    console.log(tsapi.apis.instruments);
     axios({
         headers: tsapi.headers,
         baseURL: tsapi.host,
         url: tsapi.apis.instruments.uri,
         method: tsapi.apis.instruments.method
     }).then(data => {
-        console.log('response=', data.data);
+        common.log('response=', data.data);
         res.status(200).send(JSON.stringify(data.data));
     });
     // axios.get(common.getUrl(tsapi.host, tsapi.endpoints.instruments.uri), { headers: headers }).then(data => {
@@ -67,11 +66,31 @@ app.get('/instruments', (req, res) => {
     //     res.on('end', () => {}); 
     // });
 });
-// app.get('/subscribe', (req, res) => {
-//     axios.post('https://api.fxcm.com/trading/subscribe', { models: []}, {headers: tsapi_request_header}).then(data = {
 
-//     });
-// });
+app.get('/subscribe', (req, res) => {
+    axios({
+        headers: tsapi.headers,
+        baseURL: tsapi.host,
+        url: tsapi.apis.subscribe.uri,
+        method: tsapi.apis.subscribe.method,
+        data: querystring.stringify({ "pairs": ["EUR/USD", "USD/JPY"] })
+    }).then(data => {
+        if (data.data.response.executed) {
+            common.log('subscription success', data, data.data);
+            for (let pair of data.data.pairs) {
+                common.log('setting up socket for', pair.Symbol);
+                socket.on(pair.Symbol, (data) => common.log("PriceUpdate", JSON.parse(data)));
+            }
+            res.status(200).send();
+        } else {
+            common.log(data);
+            res.status(400).send();
+        }
+    }).catch(err => {
+        common.log(err);
+        res.status(500).send();
+    });
+});
 app.post('/notify', (req, res) => {
     console.log('request coming');
     console.log('req.body', req.body);

@@ -9,4 +9,7 @@ module.exports = {
         const ss = dt.getSeconds();
         return `[${yyyy}-${mm}-${dd} ${hh}:${m}:${ss}]`;
     },
+    log(...args) {
+        console.log(this.getTimeStamp(), ...args);
+    }
 }

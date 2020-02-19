@@ -15,11 +15,11 @@ module.exports = {
             },
             subscribe: {
                 method: 'POST',
-                uri: '/trading/subscribe',
+                uri: '/subscribe',
             },
             unsubscribe: {
                 method: 'POST',
-                uri: '/trading/unsubscribe'
+                uri: '/unsubscribe'
             },
             openTrade: {
                 method: 'POST',
